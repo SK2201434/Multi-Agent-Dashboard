@@ -24,6 +24,10 @@ class Property(Base):
 
     __table_args__ = (
         CheckConstraint(
+            "total_floors IS NULL OR (total_floors >= 1 AND total_floors <= 200)",
+            name="ck_properties_total_floors_range",
+        ),
+        CheckConstraint(
             "latitude IS NULL OR (latitude >= -90 AND latitude <= 90)",
             name="ck_properties_latitude_range",
         ),
@@ -61,9 +65,11 @@ class Property(Base):
         nullable=True,
     )
     
+    # Number of floors including the ground floor (floor_number 0).
+    # Valid room floor numbers are 0 .. total_floors - 1. NULL = not configured.
     total_floors: Mapped[int | None] = mapped_column(
-    Integer,
-    nullable=True,
+        Integer,
+        nullable=True,
     )
 
     address: Mapped[str] = mapped_column(

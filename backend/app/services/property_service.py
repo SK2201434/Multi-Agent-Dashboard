@@ -1,36 +1,60 @@
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.owner import Owner
 from app.models.property import Property
 from app.schemas.property import PropertyCreate, PropertyUpdate
+from app.services import room_service
+from app.services.errors import ConflictError, DomainValidationError
 
+
+@dataclass
+class CreatedProperty:
+    property: Property
+    rooms: list[room_service.CreatedRoom] = field(default_factory=list)
 
 
 def create_property(
     db: Session,
     owner: Owner,
     data: PropertyCreate,
-) -> Property:
+) -> CreatedProperty:
+    """Create a property and any nested rooms/beds in one transaction."""
     property_obj = Property(
-        **data.model_dump(),
+        **data.model_dump(exclude={"rooms"}),
         owner_id=owner.id,
     )
 
     try:
         db.add(property_obj)
+
+        created_rooms: list[room_service.CreatedRoom] = []
+        if data.rooms:
+            # Flush so the property row exists, then add rooms and beds
+            # in the same transaction. Nothing is committed until the end.
+            db.flush()
+            created_rooms = room_service.add_rooms(
+                db, property_obj, data.rooms
+            )
+
         db.commit()
-        db.refresh(property_obj)
+    except IntegrityError as exc:
+        db.rollback()
+        raise ConflictError(
+            "The property configuration conflicts with existing data "
+            "or is invalid. Nothing was created."
+        ) from exc
     except Exception:
         db.rollback()
         raise
 
-    return property_obj
-
+    return CreatedProperty(property_obj, created_rooms)
 
 
 def list_owner_properties(
@@ -77,6 +101,17 @@ def update_property(
 
     update_data = data.model_dump(exclude_unset=True)
 
+    if "total_floors" in update_data:
+        new_total = update_data["total_floors"]
+        highest_floor = room_service.max_room_floor(db, property_obj.id)
+        if highest_floor is not None and (
+            new_total is None or new_total <= highest_floor
+        ):
+            raise DomainValidationError(
+                f"total_floors must cover existing room floors "
+                f"(highest used floor is {highest_floor})."
+            )
+
     non_nullable_fields = {
         "name",
         "property_type",
@@ -87,12 +122,12 @@ def update_property(
         "is_active",
     }
 
-    for field in non_nullable_fields:
-        if field in update_data and update_data[field] is None:
-            raise ValueError(f"{field} cannot be null.")
+    for name in non_nullable_fields:
+        if name in update_data and update_data[name] is None:
+            raise DomainValidationError(f"{name} cannot be null.")
 
-    for field, value in update_data.items():
-        setattr(property_obj, field, value)
+    for name, value in update_data.items():
+        setattr(property_obj, name, value)
 
     try:
         db.commit()

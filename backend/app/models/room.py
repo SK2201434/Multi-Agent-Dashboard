@@ -1,6 +1,7 @@
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -36,6 +37,14 @@ class Room(Base):
             "sharing_type IN ('single', 'double', 'triple', 'quad', 'other')",
             name="ck_rooms_sharing_type",
         ),
+        CheckConstraint(
+            "floor_number IS NULL OR (floor_number >= 0 AND floor_number <= 199)",
+            name="ck_rooms_floor_number_range",
+        ),
+        CheckConstraint(
+            "monthly_rent_per_bed IS NULL OR monthly_rent_per_bed > 0",
+            name="ck_rooms_monthly_rent_per_bed_positive",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -50,15 +59,13 @@ class Room(Base):
         nullable=False,
         index=True,
     )
+
+    # Ground floor = 0. NULL when the owner has not configured floors.
     floor_number: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
     )
 
-    monthly_rent_per_bed: Mapped[float | None] = mapped_column(
-        Numeric(10, 2),
-        nullable=True,
-    )
     room_number: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
@@ -79,6 +86,13 @@ class Room(Base):
     sharing_type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
+    )
+
+    # Owner-defined rent for each bed in this room. NULL only for rooms that
+    # predate pricing; the API requires it for every new room.
+    monthly_rent_per_bed: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2),
+        nullable=True,
     )
 
     is_active: Mapped[bool] = mapped_column(

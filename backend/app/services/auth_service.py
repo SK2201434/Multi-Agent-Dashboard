@@ -71,17 +71,27 @@ def authenticate_owner(
     return owner
 
 
-def create_access_token(owner_id: str) -> str:
+def create_access_token(
+    subject: str,
+    role: str = "owner",
+    token_version: int | None = None,
+) -> str:
+    """Create a JWT. The role claim separates owner and tenant tokens."""
     settings = get_settings()
     now = datetime.now(timezone.utc)
 
     payload = {
-        "sub": owner_id,
+        "sub": subject,
+        "role": role,
         "iat": now,
         "exp": now + timedelta(
             minutes=settings.access_token_expire_minutes
         ),
     }
+
+    # Tenant tokens only; owner tokens are unchanged.
+    if token_version is not None:
+        payload["tv"] = token_version
 
     return jwt.encode(
         payload,

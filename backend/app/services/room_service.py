@@ -1,64 +1,116 @@
+from dataclasses import dataclass, field
+from uuid import UUID, uuid4
 
-from uuid import UUID
-
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.bed import Bed
 from app.models.owner import Owner
 from app.models.property import Property
 from app.models.room import Room
-from app.schemas.room import RoomCreate, RoomUpdate
+from app.schemas.room import RoomCreate, RoomUpdate, RoomWithBedsCreate
+from app.services.access import (
+    get_manageable_property,
+    require_active_property,
+    require_manageable_property,
+)
+from app.services.bed_service import build_beds
+from app.services.errors import (
+    ConflictError,
+    DomainValidationError,
+    NotFoundError,
+)
+
+ROOM_CONFLICT_MESSAGE = (
+    "A room with this number already exists in this property, or the "
+    "room configuration is invalid."
+)
 
 
-def get_manageable_property(
+@dataclass
+class CreatedRoom:
+    room: Room
+    beds: list[Bed] = field(default_factory=list)
+
+
+def validate_floor_number(
+    property_obj: Property, floor_number: int | None
+) -> None:
+    """Floors run 0..total_floors-1 (0 = ground). None is always allowed."""
+    if floor_number is None:
+        return
+
+    if property_obj.total_floors is None:
+        raise DomainValidationError(
+            "Set total_floors on the property before assigning room floors."
+        )
+
+    if floor_number >= property_obj.total_floors:
+        raise DomainValidationError(
+            f"floor_number {floor_number} is outside the property floors "
+            f"(0 to {property_obj.total_floors - 1})."
+        )
+
+
+def add_rooms(
     db: Session,
-    owner: Owner,
-    property_id: UUID,
-) -> Property | None:
-    statement = select(Property).where(
-        Property.id == property_id,
-        Property.owner_id == owner.id,
-        Property.deleted_at.is_(None),
-    )
+    property_obj: Property,
+    rooms_data: list[RoomCreate] | list[RoomWithBedsCreate],
+) -> list[CreatedRoom]:
+    """Validate, add and flush rooms (and any nested beds). Never commits.
 
-    return db.scalar(statement)
+    Shared by standalone bulk creation and nested property creation so the
+    caller owns the transaction boundary. Raises ConflictError if the flush
+    hits a unique/check constraint; the caller must roll back.
+    """
+    numbers = [room.room_number for room in rooms_data]
+    if len(numbers) != len(set(numbers)):
+        raise DomainValidationError(
+            "Duplicate room numbers were provided. No rooms were created."
+        )
 
+    created: list[CreatedRoom] = []
+    for room_data in rooms_data:
+        validate_floor_number(property_obj, room_data.floor_number)
 
-def create_room(
-    db: Session,
-    owner: Owner,
-    property_id: UUID,
-    data: RoomCreate,
-) -> Room:
-    property_obj = get_manageable_property(db, owner, property_id)
-
-    if property_obj is None:
-        raise ValueError("Property not found.")
-
-    if not property_obj.is_active:
-        raise ValueError("Cannot add rooms to a hidden property.")
-
-    room = Room(
-        **data.model_dump(),
-        property_id=property_obj.id,
-    )
+        room = Room(
+            id=uuid4(),
+            property_id=property_obj.id,
+            **room_data.model_dump(exclude={"beds"}),
+        )
+        beds_data = getattr(room_data, "beds", [])
+        created.append(CreatedRoom(room, build_beds(room.id, beds_data)))
 
     try:
-        db.add(room)
-        db.commit()
-        db.refresh(room)
+        db.add_all([item.room for item in created])
+        db.add_all([bed for item in created for bed in item.beds])
+        db.flush()
     except IntegrityError as exc:
-        db.rollback()
-        raise ValueError(
-            "A room with this number already exists in this property, "
-            "or the room configuration is invalid."
-        ) from exc
+        raise ConflictError(ROOM_CONFLICT_MESSAGE) from exc
+
+    return created
+
+
+def create_rooms(
+    db: Session,
+    owner: Owner,
+    property_id: UUID,
+    data: RoomCreate | list[RoomCreate],
+) -> list[Room]:
+    property_obj = require_manageable_property(db, owner, property_id)
+    require_active_property(property_obj, "add rooms")
+
+    rooms_data = data if isinstance(data, list) else [data]
+
+    try:
+        created = add_rooms(db, property_obj, rooms_data)
+        db.commit()
     except Exception:
         db.rollback()
         raise
 
-    return room
+    return [item.room for item in created]
 
 
 def list_property_rooms(
@@ -66,10 +118,7 @@ def list_property_rooms(
     owner: Owner,
     property_id: UUID,
 ) -> list[Room]:
-    property_obj = get_manageable_property(db, owner, property_id)
-
-    if property_obj is None:
-        raise ValueError("Property not found.")
+    property_obj = require_manageable_property(db, owner, property_id)
 
     statement = (
         select(Room)
@@ -103,59 +152,55 @@ def get_property_room(
     return db.scalar(statement)
 
 
-def update_room(
-    db: Session,
-    owner: Owner,
-    property_id: UUID,
-    room_id: UUID,
-    data: RoomUpdate,
-) -> Room | None:
-    property_obj = get_manageable_property(db, owner, property_id)
-
-    if property_obj is None:
-        return None
-
+def _get_room_for_update(
+    db: Session, owner: Owner, property_id: UUID, room_id: UUID
+) -> tuple[Property, Room]:
+    property_obj = require_manageable_property(db, owner, property_id)
     room = db.scalar(
         select(Room).where(
             Room.id == room_id,
             Room.property_id == property_obj.id,
         )
     )
-
     if room is None:
-        return None
+        raise NotFoundError("Room not found.")
+    return property_obj, room
+
+
+def update_room(
+    db: Session,
+    owner: Owner,
+    property_id: UUID,
+    room_id: UUID,
+    data: RoomUpdate,
+) -> Room:
+    property_obj, room = _get_room_for_update(db, owner, property_id, room_id)
 
     update_data = data.model_dump(exclude_unset=True)
 
-    non_nullable_fields = {
-        "room_number",
-        "room_type",
-        "ac_type",
-        "sharing_type",
-        "is_active",
-    }
+    if "floor_number" in update_data:
+        validate_floor_number(property_obj, update_data["floor_number"])
 
-    for field in non_nullable_fields:
-        if field in update_data and update_data[field] is None:
-            raise ValueError(f"{field} cannot be null.")
+    if update_data.get("is_active") is True and not room.is_active:
+        # Reactivation: parent must be visible and the room must be priced.
+        require_active_property(property_obj, "reactivate a room")
+        price = update_data.get(
+            "monthly_rent_per_bed", room.monthly_rent_per_bed
+        )
+        if price is None:
+            raise DomainValidationError(
+                "Set monthly_rent_per_bed before activating this room."
+            )
 
-    if not room.is_active and update_data.get("is_active") is True:
-        # Allow reactivation only if the parent property is active.
-        if not property_obj.is_active:
-            raise ValueError("Cannot reactivate a room in a hidden property.")
-
-    for field, value in update_data.items():
-        setattr(room, field, value)
+    for field_name, value in update_data.items():
+        setattr(room, field_name, value)
 
     try:
         db.commit()
         db.refresh(room)
     except IntegrityError as exc:
         db.rollback()
-        raise ValueError(
-            "Room update violates a constraint. Check the room number "
-            "and configuration."
-        ) from exc
+        raise ConflictError(ROOM_CONFLICT_MESSAGE) from exc
     except Exception:
         db.rollback()
         raise
@@ -168,22 +213,8 @@ def deactivate_room(
     owner: Owner,
     property_id: UUID,
     room_id: UUID,
-) -> Room | None:
-    property_obj = get_manageable_property(db, owner, property_id)
-
-    if property_obj is None:
-        return None
-
-    room = db.scalar(
-        select(Room).where(
-            Room.id == room_id,
-            Room.property_id == property_obj.id,
-        )
-    )
-
-    if room is None:
-        return None
-
+) -> Room:
+    _, room = _get_room_for_update(db, owner, property_id, room_id)
     room.is_active = False
 
     try:
@@ -195,50 +226,10 @@ def deactivate_room(
 
     return room
 
-def create_rooms(db, owner, property_id, data: RoomCreate | list[RoomCreate]):
-    property_obj = get_manageable_property(db, owner, property_id)
 
-    if property_obj is None:
-        raise ValueError("Property not found.")
-
-    if not property_obj.is_active:
-        raise ValueError("Cannot add rooms to a hidden property.")
-
-    # Convert a single room into a one-item list for shared processing.
-    rooms_data = data if isinstance(data, list) else [data]
-
-    # Protect against duplicate room numbers inside the same request.
-    room_numbers = [room.room_number for room in rooms_data]
-
-    if len(room_numbers) != len(set(room_numbers)):
-        raise ValueError(
-            "Duplicate room numbers were provided. No rooms were created."
+def max_room_floor(db: Session, property_id: UUID) -> int | None:
+    return db.scalar(
+        select(func.max(Room.floor_number)).where(
+            Room.property_id == property_id
         )
-
-    rooms = [
-        Room(**room_data.model_dump(), property_id=property_obj.id)
-        for room_data in rooms_data
-    ]
-
-    try:
-        db.add_all(rooms)
-
-        # Check database constraints before committing.
-        db.flush()
-        db.commit()
-
-        for room in rooms:
-            db.refresh(room)
-
-        return rooms
-
-    except IntegrityError as exc:
-        db.rollback()
-        raise ValueError(
-            "One or more room numbers already exist in this property, "
-            "or a room configuration is invalid. No rooms were created."
-        ) from exc
-
-    except Exception:
-        db.rollback()
-        raise
+    )
