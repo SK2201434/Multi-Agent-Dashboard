@@ -14,6 +14,9 @@ from app.models.tenant import Tenant # Register the Tenant model
 from app.models.stay import Stay # Register the Stay model
 from app.models.property_tenant import PropertyTenant # Register the PropertyTenant model
 from app.models.tenant_activation_token import TenantActivationToken # Register the TenantActivationToken model
+from app.models.booking_request import BookingRequest # Register the BookingRequest model
+from app.models.stay_bed_assignment import StayBedAssignment # Register the StayBedAssignment model
+from app.models.bed_change_request import BedChangeRequest # Register the BedChangeRequest model
 
 config = context.config
 

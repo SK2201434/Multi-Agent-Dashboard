@@ -1,5 +1,6 @@
 
 from math import asin, cos, radians, sin, sqrt
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,6 +13,8 @@ from app.schemas.property import (
     NearbyPropertyResponse,
     PublicPropertyResponse,
 )
+from app.schemas.stay import PublicAvailabilityResponse, PublicRoomResponse
+from app.services import availability_service
 
 
 router = APIRouter(
@@ -122,3 +125,43 @@ def get_public_property(
         )
 
     return property_obj
+
+
+@router.get(
+    "/{property_id}/rooms",
+    response_model=list[PublicRoomResponse],
+    summary="List bookable rooms of a property",
+    description=(
+        "Public. Operational rooms with rent per bed and the number of "
+        "bookable beds. No tenant or booking data is exposed."
+    ),
+)
+def list_public_rooms(
+    property_id: UUID,
+    db: Session = Depends(get_db),
+):
+    return availability_service.list_rooms(db, property_id)
+
+
+@router.get(
+    "/{property_id}/availability",
+    response_model=PublicAvailabilityResponse,
+    summary="Bed availability for a date range",
+    description=(
+        "Public. Interval is [check_in, check_out); check_out is optional "
+        "and, when omitted, means an open-ended stay. Pending requests do "
+        "not reduce availability."
+    ),
+)
+def get_public_availability(
+    property_id: UUID,
+    check_in: date,
+    check_out: date | None = None,
+    db: Session = Depends(get_db),
+):
+    if check_out is not None and check_out <= check_in:
+        raise HTTPException(
+            status_code=422,
+            detail="check_out must be after check_in.",
+        )
+    return availability_service.availability(db, property_id, check_in, check_out)

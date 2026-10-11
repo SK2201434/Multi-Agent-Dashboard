@@ -15,6 +15,12 @@ from app.api.rooms import router as rooms_router
 from app.api.beds import router as beds_router
 from app.api.tenant_auth import router as tenant_auth_router
 from app.api.property_tenants import router as property_tenants_router
+from app.api.tenant_portal import router as tenant_portal_router
+from app.api.property_stays import (
+    bed_change_router as bed_change_requests_router,
+    booking_router as booking_requests_router,
+    stay_router as stays_router,
+)
 from app.services.errors import AppError
 
 settings = get_settings()
@@ -72,3 +78,7 @@ app.include_router(rooms_router)
 app.include_router(beds_router)
 app.include_router(tenant_auth_router)
 app.include_router(property_tenants_router)
+app.include_router(tenant_portal_router)
+app.include_router(booking_requests_router)
+app.include_router(stays_router)
+app.include_router(bed_change_requests_router)

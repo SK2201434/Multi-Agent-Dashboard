@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
+    # Calendar dates (check-in day, "today") are evaluated in this IANA zone,
+    # never the server's local zone.
+    business_timezone: str = "Asia/Kolkata"
+
     # Tenant invitations. No email/SMS provider exists yet, so the raw token
     # is never delivered. For local development only, DEV_EXPOSE_ACTIVATION_TOKENS=true
     # returns it in the owner create response, and only if ENVIRONMENT=development.

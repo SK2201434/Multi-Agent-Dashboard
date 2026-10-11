@@ -3,12 +3,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.booking_request import BookingRequest
 from app.models.owner import Owner
 from app.models.property import Property
+from app.models.stay import LIVE_STAY_STATUSES, Stay
 from app.schemas.property import PropertyCreate, PropertyUpdate
 from app.services import room_service
 from app.services.errors import ConflictError, DomainValidationError
@@ -166,6 +168,35 @@ def soft_delete_property(
 
     if property_obj is None:
         return None
+
+    live_stay = db.scalar(
+        select(Stay.id)
+        .where(
+            Stay.property_id == property_obj.id,
+            Stay.status.in_(LIVE_STAY_STATUSES),
+        )
+        .limit(1)
+    )
+    if live_stay is not None:
+        raise ConflictError(
+            "Cannot delete a property with reserved or checked-in stays. "
+            "Cancel or check them out first."
+        )
+
+    # Nothing can be approved for a deleted property; do not leave tenants'
+    # requests pending forever. Historical stays/requests stay in place.
+    db.execute(
+        update(BookingRequest)
+        .where(
+            BookingRequest.property_id == property_obj.id,
+            BookingRequest.status == "pending",
+        )
+        .values(
+            status="expired",
+            rejection_reason="The property is no longer available.",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
 
     property_obj.deleted_at = datetime.now(timezone.utc)
     property_obj.is_active = False

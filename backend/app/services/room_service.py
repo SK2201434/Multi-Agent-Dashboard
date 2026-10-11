@@ -84,6 +84,9 @@ def add_rooms(
 
     try:
         db.add_all([item.room for item in created])
+        # No ORM relationship links beds to rooms, so the unit of work does
+        # not order their INSERTs: flush rooms first or the bed FK can fail.
+        db.flush()
         db.add_all([bed for item in created for bed in item.beds])
         db.flush()
     except IntegrityError as exc:
