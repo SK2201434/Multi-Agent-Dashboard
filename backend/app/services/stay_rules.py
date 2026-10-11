@@ -53,6 +53,11 @@ def business_today() -> date:
     return datetime.now(zone).date()
 
 
+def business_date(moment: datetime) -> date:
+    """Calendar date of an aware timestamp in the business timezone."""
+    return moment.astimezone(ZoneInfo(get_settings().business_timezone)).date()
+
+
 def validate_dates(check_in: date, check_out: date | None) -> None:
     if check_out is not None and check_out <= check_in:
         raise DomainValidationError(

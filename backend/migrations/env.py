@@ -18,6 +18,9 @@ from app.models.booking_request import BookingRequest # Register the BookingRequ
 from app.models.stay_bed_assignment import StayBedAssignment # Register the StayBedAssignment model
 from app.models.bed_change_request import BedChangeRequest # Register the BedChangeRequest model
 
+from app.models.rent import RentAdjustment, RentAdjustmentReversal, RentObligation, PaymentClaim, RentPayment, RentPaymentReversal # Register rent models
+from app.models.notification import Notification # Register the Notification model
+
 config = context.config
 
 if config.config_file_name is not None:

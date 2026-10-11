@@ -11,3 +11,12 @@ from app.models.stay_bed_assignment import StayBedAssignment  # noqa: F401
 from app.models.bed_change_request import BedChangeRequest  # noqa: F401
 from app.models.property_tenant import PropertyTenant  # noqa: F401
 from app.models.tenant_activation_token import TenantActivationToken  # noqa: F401
+from app.models.rent import (  # noqa: F401
+    PaymentClaim,
+    RentAdjustment,
+    RentAdjustmentReversal,
+    RentObligation,
+    RentPayment,
+    RentPaymentReversal,
+)
+from app.models.notification import Notification  # noqa: F401

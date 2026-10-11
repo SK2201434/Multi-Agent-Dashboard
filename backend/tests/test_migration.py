@@ -16,7 +16,8 @@ from sqlalchemy.engine import make_url
 from tests.conftest import BACKEND_DIR, TEST_DATABASE_URL, _recreate_database
 
 PARENT = "d2b8f6a40c71"
-HEAD = "f5a1c8d3e962"
+MODULE6 = "f5a1c8d3e962"
+HEAD = "a9c4e7b2d150"
 
 
 @pytest.fixture()
@@ -129,4 +130,20 @@ def test_downgrade_refuses_to_destroy_module6_history(mig_url):
     assert "Refusing to downgrade" in result.stderr
     with engine.connect() as conn:  # nothing was dropped
         assert conn.execute(text("select count(*) from booking_requests")).scalar() == 1
+    engine.dispose()
+
+
+def test_payments_downgrade_refuses_to_drop_financial_or_notification_data(mig_url):
+    alembic(mig_url, "upgrade", HEAD)
+    engine = create_engine(mig_url)
+    with engine.begin() as conn:
+        owner = str(uuid.uuid4())
+        conn.execute(text("insert into owners (id, full_name, email, password_hash, is_active) "
+                          "values (:o,'o','o@x.com','h',true)"), {"o": owner})
+        conn.execute(text("insert into notifications (id, owner_id, kind, title, body, dedupe_key) "
+                          "values (gen_random_uuid(), :o, 'k', 't', 'b', 'd')"), {"o": owner})
+    result = alembic(mig_url, "downgrade", MODULE6, check=False)
+    assert result.returncode != 0 and "Refusing to downgrade" in result.stderr
+    with engine.connect() as conn:
+        assert conn.execute(text("select count(*) from notifications")).scalar() == 1
     engine.dispose()

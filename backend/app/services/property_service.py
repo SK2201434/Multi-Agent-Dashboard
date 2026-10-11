@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.booking_request import BookingRequest
+from app.models.rent import PaymentClaim, RentObligation
 from app.models.owner import Owner
 from app.models.property import Property
 from app.models.stay import LIVE_STAY_STATUSES, Stay
@@ -181,6 +182,34 @@ def soft_delete_property(
         raise ConflictError(
             "Cannot delete a property with reserved or checked-in stays. "
             "Cancel or check them out first."
+        )
+
+    pending_claim = db.scalar(
+        select(PaymentClaim.id)
+        .where(
+            PaymentClaim.property_id == property_obj.id,
+            PaymentClaim.status == "pending",
+        )
+        .limit(1)
+    )
+    if pending_claim is not None:
+        raise ConflictError(
+            "Cannot delete a property with pending payment claims. Confirm "
+            "or reject them first."
+        )
+    open_rent = db.scalar(
+        select(RentObligation.id)
+        .where(
+            RentObligation.property_id == property_obj.id,
+            RentObligation.amount_paid + RentObligation.amount_adjusted
+            < RentObligation.amount_due,
+        )
+        .limit(1)
+    )
+    if open_rent is not None:
+        raise ConflictError(
+            "Cannot delete a property with outstanding rent. Collect it "
+            "(record the payment) or waive it with an audited adjustment first."
         )
 
     # Nothing can be approved for a deleted property; do not leave tenants'

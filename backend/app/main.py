@@ -21,6 +21,12 @@ from app.api.property_stays import (
     booking_router as booking_requests_router,
     stay_router as stays_router,
 )
+from app.api.rent import (
+    owner_notifications_router,
+    owner_router as rent_owner_router,
+    tenant_notifications_router,
+    tenant_router as rent_tenant_router,
+)
 from app.services.errors import AppError
 
 settings = get_settings()
@@ -82,3 +88,7 @@ app.include_router(tenant_portal_router)
 app.include_router(booking_requests_router)
 app.include_router(stays_router)
 app.include_router(bed_change_requests_router)
+app.include_router(rent_owner_router)
+app.include_router(rent_tenant_router)
+app.include_router(owner_notifications_router)
+app.include_router(tenant_notifications_router)
