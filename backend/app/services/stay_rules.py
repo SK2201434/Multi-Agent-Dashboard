@@ -11,6 +11,9 @@ validation, approval, check-in and bed changes):
   the actual checkout is recorded.
 
 Lock order, everywhere: request/stay row -> tenant row -> bed rows (by id).
+Booking approval is the one exception: it locks the tenant row FIRST
+(tenant -> request -> bed) because it then updates the tenant's sibling
+requests; see booking_service.approve.
 Database exclusion constraints are the last line of defence; these locks
 exist so the loser of a race gets a clean 409 instead of a raw DB error.
 """

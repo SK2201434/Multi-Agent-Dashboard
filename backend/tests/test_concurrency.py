@@ -101,6 +101,87 @@ def test_one_tenant_cannot_win_two_overlapping_beds(client, world, db_session, r
     ) == 2  # the losers' siblings were superseded, never double-booked
 
 
+@pytest.mark.parametrize("round_", range(6))
+def test_same_tenant_many_simultaneous_approvals_leave_consistent_state(
+    client, world, db_session, round_
+):
+    """Many approvals for one tenant: exactly one wins, the rest get 409,
+    nothing is partially expired or double-assigned (no deadlock/500)."""
+    owner = world.owner()
+    prop = world.property(owner, rooms=1, beds_per_room=5)
+    tenant = world.tenant()
+    requests = [
+        book(client, tenant, prop["beds"][i]["id"], days(10), days(30)).json()["id"]
+        for i in range(5)
+    ]
+    results = race([approver(owner["id"], prop["id"], r) for r in requests])
+    assert outcomes(results) == ["409"] * 4 + ["ok"]
+    assert count(db_session, "select count(*) from stays") == 1
+    assert count(db_session, "select count(*) from stay_bed_assignments") == 1
+    statuses = dict(db_session.execute(text(
+        "select status, count(*) from booking_requests group by status")).all())
+    assert statuses == {"approved": 1, "expired": 4}
+    assert count(db_session, "select count(*) from booking_requests where status='pending'") == 0
+    assert count(db_session, "select count(*) from property_tenants") == 1
+
+
+@pytest.mark.parametrize("round_", range(4))
+def test_approvals_racing_with_sibling_cancel_and_reject(client, world, db_session, round_):
+    owner = world.owner()
+    prop = world.property(owner, rooms=1, beds_per_room=4)
+    tenant = world.tenant()
+    ids_ = [
+        book(client, tenant, prop["beds"][i]["id"], days(10), days(30)).json()["id"]
+        for i in range(4)
+    ]
+
+    def cancel(request_id):
+        def call(session):
+            from app.models.tenant import Tenant
+
+            t = session.get(Tenant, uuid.UUID(tenant["id"]))
+            return booking_service.cancel_by_tenant(session, t, uuid.UUID(request_id)).id
+        return call
+
+    def reject(request_id):
+        def call(session):
+            o = session.get(Owner, uuid.UUID(owner["id"]))
+            return booking_service.reject(
+                session, o, uuid.UUID(prop["id"]), uuid.UUID(request_id), None
+            ).id
+        return call
+
+    results = race([
+        approver(owner["id"], prop["id"], ids_[0]),
+        approver(owner["id"], prop["id"], ids_[1]),
+        cancel(ids_[2]),
+        reject(ids_[3]),
+    ])
+    assert [r[0] for r in results[:2]].count("ok") <= 1
+    assert all(r[0] in ("ok", 409) for r in results)
+    assert count(db_session, "select count(*) from stays") <= 1
+    assert count(db_session, "select count(*) from stay_bed_assignments") == count(
+        db_session, "select count(*) from stays")
+    # a request is never left both approved and without a stay, or pending after a win
+    if count(db_session, "select count(*) from stays") == 1:
+        assert count(
+            db_session, "select count(*) from booking_requests where status='approved'") == 1
+        assert count(
+            db_session, "select count(*) from booking_requests where status='pending'") == 0
+
+
+def test_approving_missing_or_foreign_request_is_404(client, world):
+    owner, other = world.owner(), world.owner()
+    prop = world.property(owner, rooms=1, beds_per_room=1)
+    rid = book(client, world.tenant(), prop["beds"][0]["id"], days(10)).json()["id"]
+    other_prop = world.property(other, rooms=1, beds_per_room=1)
+    for pid, request_id, who in ((prop["id"], str(uuid.uuid4()), owner),
+                                 (other_prop["id"], rid, other)):
+        res = client.post(f"/api/v1/properties/{pid}/booking-requests/{request_id}/approve",
+                          headers=who["headers"])
+        assert res.status_code == 404, res.text
+
+
 def test_competing_bed_changes_to_one_destination(client, world, db_session):
     owner = world.owner()
     prop = world.property(owner, rooms=1, beds_per_room=3)

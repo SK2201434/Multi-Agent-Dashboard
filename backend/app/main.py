@@ -27,6 +27,7 @@ from app.api.rent import (
     tenant_notifications_router,
     tenant_router as rent_tenant_router,
 )
+from app.api.dashboard import dashboard_router, reports_router
 from app.services.errors import AppError
 
 settings = get_settings()
@@ -92,3 +93,5 @@ app.include_router(rent_owner_router)
 app.include_router(rent_tenant_router)
 app.include_router(owner_notifications_router)
 app.include_router(tenant_notifications_router)
+app.include_router(dashboard_router)
+app.include_router(reports_router)

@@ -251,11 +251,25 @@ def approve(
 ) -> Stay:
     property_obj = require_manageable_property(db, owner, property_id)
     try:
-        request = _lock_pending_request(db, property_obj.id, request_id)
-
-        tenant = db.scalar(
-            select(Tenant).where(Tenant.id == request.tenant_id).with_for_update()
+        # Lock order: tenant -> request -> bed. The tenant lock comes first
+        # because _expire_superseded later updates this tenant's SIBLING
+        # requests; if each concurrent approval held its own request lock
+        # while waiting for the tenant lock, they would deadlock. Taking the
+        # tenant lock before any request row serializes same-tenant approvals
+        # without anyone holding a sibling. tenant_id never changes, so the
+        # unlocked read is safe; the request is re-validated under its lock.
+        tenant_id = db.scalar(
+            select(BookingRequest.tenant_id).where(
+                BookingRequest.id == request_id,
+                BookingRequest.property_id == property_obj.id,
+            )
         )
+        if tenant_id is None:
+            raise NotFoundError("Booking request not found.")
+        tenant = db.scalar(
+            select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+        )
+        request = _lock_pending_request(db, property_obj.id, request_id)
         if tenant is None or tenant.status != "active":
             raise ConflictError("The tenant account is not active.")
 
