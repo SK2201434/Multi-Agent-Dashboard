@@ -20,6 +20,7 @@ from app.models.bed_change_request import BedChangeRequest # Register the BedCha
 
 from app.models.rent import RentAdjustment, RentAdjustmentReversal, RentObligation, PaymentClaim, RentPayment, RentPaymentReversal # Register rent models
 from app.models.notification import Notification # Register the Notification model
+from app.models.review import Review # Register the Review model
 
 config = context.config
 

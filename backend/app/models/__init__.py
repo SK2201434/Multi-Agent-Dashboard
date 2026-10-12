@@ -20,3 +20,4 @@ from app.models.rent import (  # noqa: F401
     RentPaymentReversal,
 )
 from app.models.notification import Notification  # noqa: F401
+from app.models.review import Review  # noqa: F401
