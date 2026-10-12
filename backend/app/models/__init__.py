@@ -21,3 +21,4 @@ from app.models.rent import (  # noqa: F401
 )
 from app.models.notification import Notification  # noqa: F401
 from app.models.review import Review  # noqa: F401
+from app.models.complaint import Complaint, ComplaintStatusHistory  # noqa: F401

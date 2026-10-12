@@ -17,7 +17,8 @@ from tests.conftest import BACKEND_DIR, TEST_DATABASE_URL, _recreate_database
 
 PARENT = "d2b8f6a40c71"
 MODULE6 = "f5a1c8d3e962"
-HEAD = "c8d2e5f7a914"
+HEAD = "d4e7a9b1c360"
+REVIEWS_HEAD = "c8d2e5f7a914"
 RENT_HEAD = "a9c4e7b2d150"
 
 
@@ -175,4 +176,35 @@ def test_reviews_migration_round_trip_and_downgrade_guard(mig_url):
     assert result.returncode != 0 and "Refusing to downgrade" in result.stderr
     with engine.connect() as conn:
         assert conn.execute(text("select count(*) from reviews")).scalar() == 1
+    engine.dispose()
+
+
+def test_complaints_migration_round_trip_triggers_and_downgrade_guard(mig_url):
+    alembic(mig_url, "upgrade", HEAD)
+    engine = create_engine(mig_url)
+    q = ("select count(*) from information_schema.tables where table_name in ('complaints','complaint_status_history')")
+    with engine.connect() as conn:
+        assert conn.execute(text(q)).scalar() == 2
+    alembic(mig_url, "downgrade", REVIEWS_HEAD)  # empty: allowed
+    with engine.connect() as conn:
+        assert conn.execute(text(q)).scalar() == 0
+        assert conn.execute(text("select count(*) from pg_proc where proname like 'complaint%'")).scalar() == 0
+    alembic(mig_url, "upgrade", HEAD)
+    with engine.begin() as conn:
+        owner, prop, tenant, stay, cid = (str(uuid.uuid4()) for _ in range(5))
+        conn.execute(text("insert into owners (id, full_name, email, password_hash, is_active) values (:o,'o','o@x.com','h',true)"), {"o": owner})
+        conn.execute(text("insert into properties (id, owner_id, name, property_type, address, city, state, postal_code, is_active) "
+                          "values (:p,:o,'p','pg','a','c','s','500001',true)"), {"p": prop, "o": owner})
+        conn.execute(text("insert into tenants (id, full_name, email, status) values (:t,'t','t@x.com','pending_activation')"), {"t": tenant})
+        conn.execute(text("insert into stays (id, tenant_id, property_id, status, planned_check_in, actual_check_in_at, monthly_rent) "
+                          "values (:s,:t,:p,'checked_in','2026-01-01', now(), 1)"), {"s": stay, "t": tenant, "p": prop})
+        conn.execute(text("insert into complaints (id, stay_id, category, title, description, visibility, status) "
+                          "values (:c,:s,'other','t','d','public','open')"), {"c": cid, "s": stay})
+        conn.execute(text("insert into complaint_status_history (id, complaint_id, from_status, to_status, actor_type, actor_tenant_id) "
+                          "values (gen_random_uuid(), :c, NULL, 'open', 'tenant', :t)"), {"c": cid, "t": tenant})
+    result = alembic(mig_url, "downgrade", REVIEWS_HEAD, check=False)
+    assert result.returncode != 0 and "Refusing to downgrade" in result.stderr
+    with engine.connect() as conn:
+        assert conn.execute(text("select count(*) from complaints")).scalar() == 1
+        assert conn.execute(text("select count(*) from complaint_status_history")).scalar() == 1
     engine.dispose()
