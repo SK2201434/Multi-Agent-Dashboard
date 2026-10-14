@@ -23,12 +23,48 @@ class CreatedProperty:
     rooms: list[room_service.CreatedRoom] = field(default_factory=list)
 
 
+# Coordinates closer than this (degrees, ~0.1 m) count as the same spot.
+COORDINATE_TOLERANCE = 1e-6
+
+
+def _ensure_location_free(
+    db: Session,
+    latitude: float | None,
+    longitude: float | None,
+    exclude_property_id: UUID | None = None,
+) -> None:
+    """Reject a location already used by another (non-deleted) property."""
+    if latitude is None or longitude is None:
+        return
+
+    statement = select(Property.id).where(
+        Property.deleted_at.is_(None),
+        Property.latitude.is_not(None),
+        Property.longitude.is_not(None),
+        Property.latitude.between(
+            latitude - COORDINATE_TOLERANCE, latitude + COORDINATE_TOLERANCE
+        ),
+        Property.longitude.between(
+            longitude - COORDINATE_TOLERANCE, longitude + COORDINATE_TOLERANCE
+        ),
+    )
+    if exclude_property_id is not None:
+        statement = statement.where(Property.id != exclude_property_id)
+
+    if db.scalar(statement.limit(1)) is not None:
+        raise ConflictError(
+            "Another property is already registered at this location."
+        )
+
+
 def create_property(
     db: Session,
     owner: Owner,
     data: PropertyCreate,
 ) -> CreatedProperty:
     """Create a property and any nested rooms/beds in one transaction."""
+    _ensure_location_free(db, data.latitude, data.longitude)
+
     property_obj = Property(
         **data.model_dump(exclude={"rooms"}),
         owner_id=owner.id,
@@ -128,6 +164,14 @@ def update_property(
     for name in non_nullable_fields:
         if name in update_data and update_data[name] is None:
             raise DomainValidationError(f"{name} cannot be null.")
+
+    if "latitude" in update_data or "longitude" in update_data:
+        _ensure_location_free(
+            db,
+            update_data.get("latitude", property_obj.latitude),
+            update_data.get("longitude", property_obj.longitude),
+            exclude_property_id=property_obj.id,
+        )
 
     for name, value in update_data.items():
         setattr(property_obj, name, value)
